@@ -152,6 +152,27 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 		// Wait for a short period before polling again
 		time.Sleep(2 * time.Second)
 	}
+
+	//get NFT token metadata
+	fmt.Println("NFT token metadata:")
+
+	metadataAccount, err := token_metadata.GetTokenMetaPubkey(mint.PublicKey)
+	if err != nil {
+		log.Fatalf("faield to get metadata account, err: %v", err)
+	}
+	// get data which stored in metadataAccount
+	accountInfo, err := c.GetAccountInfo(context.Background(), metadataAccount.ToBase58())
+	if err != nil {
+		log.Fatalf("failed to get accountInfo, err: %v", err)
+	}
+
+	// parse it
+	/*metadata, err := token_metadata.MetadataDeserialize(accountInfo.Data)
+	if err != nil {
+		log.Fatalf("failed to parse metaAccount, err: %v", err)
+	}
+	spew.Dump(metadata)*/
+	fmt.Printf("accountInfo: %v\n", accountInfo)
 }
 
 func main() {
