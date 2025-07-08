@@ -15,6 +15,7 @@ import (
 	"github.com/blocto/solana-go-sdk/program/token"
 	"github.com/blocto/solana-go-sdk/rpc"
 	"github.com/blocto/solana-go-sdk/types"
+	"github.com/davecgh/go-spew/spew"
 
 	"github.com/tyler-smith/go-bip39"
 )
@@ -235,6 +236,27 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) {
 	}
 }
 
+func getNFTMeta(c *client.Client, mint types.Account) {
+	metadataAccount, err := token_metadata.GetTokenMetaPubkey(mint.PublicKey)
+	if err != nil {
+		log.Fatalf("faield to get metadata account, err: %v", err)
+	}
+
+	// get data which stored in metadataAccount
+	accountInfo, err := c.GetAccountInfoWithConfig(context.Background(), metadataAccount.ToBase58(), client.GetAccountInfoConfig{Commitment: rpc.CommitmentConfirmed})
+	if err != nil {
+		log.Fatalf("failed to get accountInfo, err: %v", err)
+	}
+
+	// parse it
+	metadata, err := token_metadata.MetadataDeserialize(accountInfo.Data)
+	if err != nil {
+		log.Fatalf("failed to parse metaAccount, err: %v", err)
+	}
+	spew.Dump(metadata)
+
+}
+
 func main() {
 
 	mnemonic := "near industry doctor stool celery vehicle enlist symbol skate plastic ceiling zero"
@@ -269,5 +291,7 @@ func main() {
 	mintNFT(c, feePayer, mint, collection)
 
 	transferNFT(c, feePayer, mint, receiver)
+
+	getNFTMeta(c, mint)
 
 }
