@@ -72,19 +72,13 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 					Payer:                   feePayer.PublicKey,
 					UpdateAuthority:         feePayer.PublicKey,
 					UpdateAuthorityIsSigner: true,
-					IsMutable:               true,
+					IsMutable:               false,
 					Data: token_metadata.DataV2{
 						Name:                 "Fake SMS #1355",
-						Symbol:               "FSMB",
+						Symbol:               "",
 						Uri:                  "https://34c7ef24f4v2aejh75xhxy5z6ars4xv47gpsdrei6fiowptk2nqq.arweave.net/3wXyF1wvK6ARJ_9ue-O58CMuXrz5nyHEiPFQ6z5q02E",
-						SellerFeeBasisPoints: 100,
-						Creators: &[]token_metadata.Creator{
-							{
-								Address:  feePayer.PublicKey,
-								Verified: true,
-								Share:    100,
-							},
-						},
+						SellerFeeBasisPoints: 0,
+						Creators:             nil,
 						Collection: &token_metadata.Collection{
 							Verified: false,
 							Key:      collection.PublicKey,
