@@ -139,7 +139,7 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 		}
 
 		if len(statuses) > 0 && statuses[0] != nil {
-			if *statuses[0].ConfirmationStatus == rpc.CommitmentFinalized || *statuses[0].ConfirmationStatus == rpc.CommitmentConfirmed {
+			if *statuses[0].ConfirmationStatus == rpc.CommitmentConfirmed {
 				fmt.Println("Transaction successfully confirmed!")
 				break
 			} else {
@@ -153,26 +153,86 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 		time.Sleep(2 * time.Second)
 	}
 
-	//get NFT token metadata
-	fmt.Println("NFT token metadata:")
+}
 
-	metadataAccount, err := token_metadata.GetTokenMetaPubkey(mint.PublicKey)
+func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) {
+	// Sender's ATA (must already exist)
+	senderAta, _, err := common.FindAssociatedTokenAddress(feePayer.PublicKey, mint.PublicKey)
 	if err != nil {
-		log.Fatalf("faield to get metadata account, err: %v", err)
-	}
-	// get data which stored in metadataAccount
-	accountInfo, err := c.GetAccountInfo(context.Background(), metadataAccount.ToBase58())
-	if err != nil {
-		log.Fatalf("failed to get accountInfo, err: %v", err)
+		panic(fmt.Errorf("failed to find sender's ATA: %w", err))
 	}
 
-	// parse it
-	/*metadata, err := token_metadata.MetadataDeserialize(accountInfo.Data)
+	// Recipient's ATA (may not exist yet)
+	receiverAta, _, err := common.FindAssociatedTokenAddress(receiver.PublicKey, mint.PublicKey)
 	if err != nil {
-		log.Fatalf("failed to parse metaAccount, err: %v", err)
+		panic(fmt.Errorf("failed to find recipient's ATA: %w", err))
 	}
-	spew.Dump(metadata)*/
-	fmt.Printf("accountInfo: %v\n", accountInfo)
+
+	res, err := c.GetLatestBlockhash(context.Background())
+	if err != nil {
+		log.Fatalf("get recent block hash error, err: %v\n", err)
+	}
+
+	tx, err := types.NewTransaction(types.NewTransactionParam{
+		Message: types.NewMessage(types.NewMessageParam{
+			FeePayer:        feePayer.PublicKey,
+			RecentBlockhash: res.Blockhash,
+			Instructions: []types.Instruction{
+				associated_token_account.CreateAssociatedTokenAccount(associated_token_account.CreateAssociatedTokenAccountParam{
+					Funder:                 feePayer.PublicKey,
+					Owner:                  receiver.PublicKey,
+					Mint:                   mint.PublicKey,
+					AssociatedTokenAccount: receiverAta,
+				}),
+				token.TransferChecked(token.TransferCheckedParam{
+					From:     senderAta,
+					To:       receiverAta,
+					Mint:     mint.PublicKey,
+					Auth:     feePayer.PublicKey,
+					Signers:  []common.PublicKey{},
+					Amount:   1,
+					Decimals: 0,
+				}),
+			},
+		}),
+		Signers: []types.Account{feePayer},
+	})
+	if err != nil {
+		log.Fatalf("failed to new tx, err: %v", err)
+	}
+
+	txSig, err := c.SendTransactionWithConfig(context.Background(), tx, client.SendTransactionConfig{PreflightCommitment: rpc.CommitmentConfirmed})
+	if err != nil {
+		log.Fatalf("send raw tx error, err: %v\n", err)
+	}
+
+	fmt.Println("transfer txid:", txSig)
+
+	// Wait for transaction confirmation ---
+	fmt.Println("waiting for tx confirmation...")
+	for {
+		// Get the transaction status
+		statuses, err := c.GetSignatureStatuses(context.Background(), []string{txSig})
+		if err != nil {
+			log.Printf("Failed to get signature statuses: %v", err)
+			time.Sleep(2 * time.Second) // Wait before retrying
+			continue
+		}
+
+		if len(statuses) > 0 && statuses[0] != nil {
+			if *statuses[0].ConfirmationStatus == rpc.CommitmentConfirmed {
+				fmt.Println("Transaction successfully confirmed!")
+				break
+			} else {
+				fmt.Println("Transaction is being processed...")
+			}
+		} else {
+			fmt.Println("Transaction status not yet available...")
+		}
+
+		// Wait for a short period before polling again
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func main() {
@@ -185,7 +245,7 @@ func main() {
 	}
 	fmt.Printf("feePayer: %v\n", feePayer.PublicKey.ToBase58())
 
-	c := client.NewClient(rpc.DevnetRPCEndpoint)
+	c := client.NewClient(rpc.TestnetRPCEndpoint)
 
 	//show feePayer balance
 	balance, err := c.GetBalance(
@@ -203,8 +263,11 @@ func main() {
 	collection := types.NewAccount()
 	fmt.Printf("collection: %v\n", collection.PublicKey.ToBase58())
 
+	receiver := types.NewAccount()
+	fmt.Printf("receiver: %v\n", receiver.PublicKey.ToBase58())
+
 	mintNFT(c, feePayer, mint, collection)
 
-	//transferNFT()
+	transferNFT(c, feePayer, mint, receiver)
 
 }
