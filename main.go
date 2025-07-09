@@ -120,7 +120,7 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 		log.Fatalf("failed to send tx, err: %v", err)
 	}
 
-	fmt.Println("mint txid:", txSig)
+	fmt.Printf("mint txid: %v\n\n", txSig)
 
 	// Wait for transaction confirmation ---
 	fmt.Println("waiting for tx confirmation...")
@@ -135,7 +135,7 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 
 		if len(statuses) > 0 && statuses[0] != nil {
 			if *statuses[0].ConfirmationStatus == rpc.CommitmentConfirmed {
-				fmt.Println("Transaction successfully confirmed!")
+				fmt.Printf("Transaction successfully confirmed!\n\n")
 				break
 			} else {
 				fmt.Println("Transaction is being processed...")
@@ -150,7 +150,7 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 
 }
 
-func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) {
+func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) common.PublicKey {
 	// Sender's ATA (must already exist)
 	senderAta, _, err := common.FindAssociatedTokenAddress(feePayer.PublicKey, mint.PublicKey)
 	if err != nil {
@@ -201,7 +201,7 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) {
 		log.Fatalf("send raw tx error, err: %v\n", err)
 	}
 
-	fmt.Println("transfer txid:", txSig)
+	fmt.Printf("transfer txid: %v\n\n", txSig)
 
 	// Wait for transaction confirmation ---
 	fmt.Println("waiting for tx confirmation...")
@@ -216,7 +216,7 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) {
 
 		if len(statuses) > 0 && statuses[0] != nil {
 			if *statuses[0].ConfirmationStatus == rpc.CommitmentConfirmed {
-				fmt.Println("Transaction successfully confirmed!")
+				fmt.Printf("Transaction successfully confirmed!\n\n")
 				break
 			} else {
 				fmt.Println("Transaction is being processed...")
@@ -228,10 +228,42 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) {
 		// Wait for a short period before polling again
 		time.Sleep(2 * time.Second)
 	}
+
+	return receiverAta
 }
 
-func getNFTMeta(c *client.Client, mint types.Account) {
-	metadataAccount, err := token_metadata.GetTokenMetaPubkey(mint.PublicKey)
+func getNFTInfo(c *client.Client, ata common.PublicKey) {
+
+	//token account info
+	getAccountInfoResponse, err := c.GetAccountInfoWithConfig(context.TODO(), ata.ToBase58(), client.GetAccountInfoConfig{Commitment: rpc.CommitmentConfirmed})
+	if err != nil {
+		log.Fatalf("failed to get account info, err: %v", err)
+	}
+
+	tokenAccount, err := token.TokenAccountFromData(getAccountInfoResponse.Data)
+	if err != nil {
+		log.Fatalf("failed to parse data to a token account, err: %v", err)
+	}
+
+	fmt.Printf("token account:\n%+v\n\n", tokenAccount)
+
+	mint := tokenAccount.Mint
+
+	//mint account info
+	getAccountInfoResponse, err = c.GetAccountInfoWithConfig(context.TODO(), mint.ToBase58(), client.GetAccountInfoConfig{Commitment: rpc.CommitmentConfirmed})
+	if err != nil {
+		log.Fatalf("failed to get account info, err: %v", err)
+	}
+
+	mintAccount, err := token.MintAccountFromData(getAccountInfoResponse.Data)
+	if err != nil {
+		log.Fatalf("failed to parse data to a mint account, err: %v", err)
+	}
+
+	fmt.Printf("mint account:\n%+v\n\n", mintAccount)
+
+	//metadata account info
+	metadataAccount, err := token_metadata.GetTokenMetaPubkey(mint)
 	if err != nil {
 		log.Fatalf("faield to get metadata account, err: %v", err)
 	}
@@ -247,6 +279,7 @@ func getNFTMeta(c *client.Client, mint types.Account) {
 	if err != nil {
 		log.Fatalf("failed to parse metaAccount, err: %v", err)
 	}
+	fmt.Println("metadata account:")
 	spew.Dump(metadata)
 
 }
@@ -259,7 +292,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load feePayer account, err: %v", err)
 	}
-	fmt.Printf("feePayer: %v\n", feePayer.PublicKey.ToBase58())
+	fmt.Printf("feePayer: %v\n\n", feePayer.PublicKey.ToBase58())
 
 	c := client.NewClient(rpc.TestnetRPCEndpoint)
 
@@ -271,21 +304,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to request airdrop, err: %v", err)
 	}
-	fmt.Println("balance:", balance)
+	fmt.Printf("balance: %v\n\n", balance)
 
 	mint := types.NewAccount()
-	fmt.Printf("NFT: %v\n", mint.PublicKey.ToBase58())
+	fmt.Printf("NFT: %v\n\n", mint.PublicKey.ToBase58())
 
 	collection := types.NewAccount()
-	fmt.Printf("collection: %v\n", collection.PublicKey.ToBase58())
+	fmt.Printf("collection: %v\n\n", collection.PublicKey.ToBase58())
 
 	receiver := types.NewAccount()
-	fmt.Printf("receiver: %v\n", receiver.PublicKey.ToBase58())
+	fmt.Printf("receiver: %v\n\n", receiver.PublicKey.ToBase58())
 
 	mintNFT(c, feePayer, mint, collection)
 
-	transferNFT(c, feePayer, mint, receiver)
+	ata := transferNFT(c, feePayer, mint, receiver)
 
-	getNFTMeta(c, mint)
+	getNFTInfo(c, ata)
 
 }
