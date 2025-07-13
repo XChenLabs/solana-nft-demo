@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"time"
 
 	"github.com/blocto/solana-go-sdk/client"
@@ -20,30 +21,50 @@ import (
 	"github.com/tyler-smith/go-bip39"
 )
 
-func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
-	ata, _, err := common.FindAssociatedTokenAddress(feePayer.PublicKey, mint.PublicKey)
+type NftMintReq struct {
+	receiver   common.PublicKey
+	name       string
+	uri        string
+	collection common.PublicKey
+}
+
+type NftTransferReq struct {
+	tokenAddress common.PublicKey
+	sender       common.PublicKey
+	receiver     common.PublicKey
+}
+
+func mintNFT(c *client.Client, feePayer types.Account, req *NftMintReq) (txHash string, tokenPubkey *common.PublicKey, err error) {
+
+	mint := types.NewAccount()
+
+	ata, _, err := common.FindAssociatedTokenAddress(req.receiver, mint.PublicKey)
 	if err != nil {
-		log.Fatalf("failed to find a valid ata, err: %v", err)
+		slog.Error("failed to find a valid ata, err: ", "error", err)
+		return "", nil, err
 	}
 
 	tokenMetadataPubkey, err := token_metadata.GetTokenMetaPubkey(mint.PublicKey)
 	if err != nil {
-		log.Fatalf("failed to find a valid token metadata, err: %v", err)
-
+		slog.Error("failed to find a valid token metadata, err: ", "error", err)
+		return "", nil, err
 	}
 	tokenMasterEditionPubkey, err := token_metadata.GetMasterEdition(mint.PublicKey)
 	if err != nil {
-		log.Fatalf("failed to find a valid master edition, err: %v", err)
+		slog.Error("failed to find a valid master edition, err: ", "error", err)
+		return "", nil, err
 	}
 
 	mintAccountRent, err := c.GetMinimumBalanceForRentExemption(context.Background(), token.MintAccountSize)
 	if err != nil {
-		log.Fatalf("failed to get mint account rent, err: %v", err)
+		slog.Error("failed to get mint account rent, err: ", "error", err)
+		return "", nil, err
 	}
 
-	recentBlockhashResponse, err := c.GetLatestBlockhash(context.Background())
+	recentBlockhashResponse, err := c.GetLatestBlockhashWithConfig(context.Background(), client.GetLatestBlockhashConfig{Commitment: rpc.CommitmentConfirmed})
 	if err != nil {
-		log.Fatalf("failed to get recent blockhash, err: %v", err)
+		slog.Error("failed to get recent blockhash, err: ", "error", err)
+		return "", nil, err
 	}
 
 	tx, err := types.NewTransaction(types.NewTransactionParam{
@@ -74,14 +95,14 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 					UpdateAuthorityIsSigner: true,
 					IsMutable:               false,
 					Data: token_metadata.DataV2{
-						Name:                 "Fake SMS #1355",
+						Name:                 req.name,
 						Symbol:               "",
-						Uri:                  "https://34c7ef24f4v2aejh75xhxy5z6ars4xv47gpsdrei6fiowptk2nqq.arweave.net/3wXyF1wvK6ARJ_9ue-O58CMuXrz5nyHEiPFQ6z5q02E",
+						Uri:                  req.uri,
 						SellerFeeBasisPoints: 0,
 						Creators:             nil,
 						Collection: &token_metadata.Collection{
 							Verified: false,
-							Key:      collection.PublicKey,
+							Key:      req.collection,
 						},
 						Uses: nil,
 					},
@@ -89,7 +110,7 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 				}),
 				associated_token_account.CreateAssociatedTokenAccount(associated_token_account.CreateAssociatedTokenAccountParam{
 					Funder:                 feePayer.PublicKey,
-					Owner:                  feePayer.PublicKey,
+					Owner:                  req.receiver,
 					Mint:                   mint.PublicKey,
 					AssociatedTokenAccount: ata,
 				}),
@@ -112,60 +133,53 @@ func mintNFT(c *client.Client, feePayer, mint, collection types.Account) {
 		}),
 	})
 	if err != nil {
-		log.Fatalf("failed to new a tx, err: %v", err)
+		slog.Error("failed to new a tx, err: ", "error", err)
+		return "", nil, err
 	}
 
-	txSig, err := c.SendTransaction(context.Background(), tx)
+	txSig, err := c.SendTransactionWithConfig(context.Background(), tx, client.SendTransactionConfig{PreflightCommitment: rpc.CommitmentConfirmed})
 	if err != nil {
-		log.Fatalf("failed to send tx, err: %v", err)
+		slog.Error("failed to send tx, err: ", "error", err)
+		return "", nil, err
 	}
 
-	fmt.Printf("mint txid: %v\n\n", txSig)
-
-	// Wait for transaction confirmation ---
-	fmt.Println("waiting for tx confirmation...")
-	for {
-		// Get the transaction status
-		statuses, err := c.GetSignatureStatuses(context.Background(), []string{txSig})
-		if err != nil {
-			log.Printf("Failed to get signature statuses: %v", err)
-			time.Sleep(2 * time.Second) // Wait before retrying
-			continue
-		}
-
-		if len(statuses) > 0 && statuses[0] != nil {
-			if *statuses[0].ConfirmationStatus == rpc.CommitmentConfirmed {
-				fmt.Printf("Transaction successfully confirmed!\n\n")
-				break
-			} else {
-				fmt.Println("Transaction is being processed...")
-			}
-		} else {
-			fmt.Println("Transaction status not yet available...")
-		}
-
-		// Wait for a short period before polling again
-		time.Sleep(2 * time.Second)
-	}
+	return txSig, &ata, nil
 
 }
 
-func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) common.PublicKey {
-	// Sender's ATA (must already exist)
-	senderAta, _, err := common.FindAssociatedTokenAddress(feePayer.PublicKey, mint.PublicKey)
+func transferNFT(c *client.Client, feePayer types.Account, req *NftTransferReq) (txHash string, tokenPubkey *common.PublicKey, err error) {
+
+	//token account info
+	tokenInfo, err := c.GetAccountInfoWithConfig(context.TODO(), req.tokenAddress.ToBase58(), client.GetAccountInfoConfig{Commitment: rpc.CommitmentConfirmed})
 	if err != nil {
-		panic(fmt.Errorf("failed to find sender's ATA: %w", err))
+		slog.Error("failed to get account info, err: ", "error", err)
+		return "", nil, err
+	}
+	tokenAccount, err := token.TokenAccountFromData(tokenInfo.Data)
+	if err != nil {
+		slog.Error("failed to parse data to a token account, err: ", "error", err)
+		return "", nil, err
+	}
+	mintPubkey := tokenAccount.Mint
+
+	// Sender's ATA (must already exist)
+	senderAta, _, err := common.FindAssociatedTokenAddress(req.sender, mintPubkey)
+	if err != nil {
+		slog.Error("failed to find sender's ATA: ", "error", err)
+		return "", nil, err
 	}
 
 	// Recipient's ATA (may not exist yet)
-	receiverAta, _, err := common.FindAssociatedTokenAddress(receiver.PublicKey, mint.PublicKey)
+	receiverAta, _, err := common.FindAssociatedTokenAddress(req.receiver, mintPubkey)
 	if err != nil {
-		panic(fmt.Errorf("failed to find recipient's ATA: %w", err))
+		slog.Error("failed to find recipient's ATA: ", "error", err)
+		return "", nil, err
 	}
 
-	res, err := c.GetLatestBlockhash(context.Background())
+	res, err := c.GetLatestBlockhashWithConfig(context.Background(), client.GetLatestBlockhashConfig{Commitment: rpc.CommitmentConfirmed})
 	if err != nil {
-		log.Fatalf("get recent block hash error, err: %v\n", err)
+		slog.Error("get recent block hash error, err: ", "error", err)
+		return "", nil, err
 	}
 
 	tx, err := types.NewTransaction(types.NewTransactionParam{
@@ -175,14 +189,14 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) commo
 			Instructions: []types.Instruction{
 				associated_token_account.CreateAssociatedTokenAccount(associated_token_account.CreateAssociatedTokenAccountParam{
 					Funder:                 feePayer.PublicKey,
-					Owner:                  receiver.PublicKey,
-					Mint:                   mint.PublicKey,
+					Owner:                  req.receiver,
+					Mint:                   mintPubkey,
 					AssociatedTokenAccount: receiverAta,
 				}),
 				token.TransferChecked(token.TransferCheckedParam{
 					From:     senderAta,
 					To:       receiverAta,
-					Mint:     mint.PublicKey,
+					Mint:     mintPubkey,
 					Auth:     feePayer.PublicKey,
 					Signers:  []common.PublicKey{},
 					Amount:   1,
@@ -193,21 +207,25 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) commo
 		Signers: []types.Account{feePayer},
 	})
 	if err != nil {
-		log.Fatalf("failed to new tx, err: %v", err)
+		slog.Error("failed to new tx, err: ", "error", err)
+		return "", nil, err
 	}
 
 	txSig, err := c.SendTransactionWithConfig(context.Background(), tx, client.SendTransactionConfig{PreflightCommitment: rpc.CommitmentConfirmed})
 	if err != nil {
-		log.Fatalf("send raw tx error, err: %v\n", err)
+		slog.Error("send raw tx error, err: ", "error", err)
+		return "", nil, err
 	}
 
-	fmt.Printf("transfer txid: %v\n\n", txSig)
+	return txSig, &receiverAta, nil
+}
 
+func waitForTxConfirmation(c *client.Client, txHash string) {
 	// Wait for transaction confirmation ---
-	fmt.Println("waiting for tx confirmation...")
+	fmt.Println("waiting for tx", txHash, "confirmation...")
 	for {
 		// Get the transaction status
-		statuses, err := c.GetSignatureStatuses(context.Background(), []string{txSig})
+		statuses, err := c.GetSignatureStatuses(context.Background(), []string{txHash})
 		if err != nil {
 			log.Printf("Failed to get signature statuses: %v", err)
 			time.Sleep(2 * time.Second) // Wait before retrying
@@ -228,11 +246,11 @@ func transferNFT(c *client.Client, feePayer, mint, receiver types.Account) commo
 		// Wait for a short period before polling again
 		time.Sleep(2 * time.Second)
 	}
-
-	return receiverAta
 }
 
 func getNFTInfo(c *client.Client, ata common.PublicKey) {
+
+	fmt.Println("token info for:", ata.ToBase58(), "-------------------------------------------")
 
 	//token account info
 	getAccountInfoResponse, err := c.GetAccountInfoWithConfig(context.TODO(), ata.ToBase58(), client.GetAccountInfoConfig{Commitment: rpc.CommitmentConfirmed})
@@ -282,6 +300,7 @@ func getNFTInfo(c *client.Client, ata common.PublicKey) {
 	fmt.Println("metadata account:")
 	spew.Dump(metadata)
 
+	fmt.Println("---------------------------------------------------------------------")
 }
 
 func main() {
@@ -294,7 +313,15 @@ func main() {
 	}
 	fmt.Printf("feePayer: %v\n\n", feePayer.PublicKey.ToBase58())
 
-	c := client.NewClient(rpc.TestnetRPCEndpoint)
+	mnemonic = "manual still spice defense merry danger bus venture rare peace matrix federal"
+	seed = bip39.NewSeed(mnemonic, "") // (mnemonic, password)
+	user1, err := types.AccountFromSeed(seed[:32])
+	if err != nil {
+		log.Fatalf("failed to load user1 account, err: %v", err)
+	}
+	fmt.Printf("user1: %v\n\n", user1.PublicKey.ToBase58())
+
+	c := client.NewClient(rpc.DevnetRPCEndpoint)
 
 	//show feePayer balance
 	balance, err := c.GetBalance(
@@ -304,7 +331,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to request airdrop, err: %v", err)
 	}
-	fmt.Printf("balance: %v\n\n", balance)
+	fmt.Printf("feePayer balance: %v\n\n", balance)
+
+	//show feePayer balance
+	balance, err = c.GetBalance(
+		context.TODO(),
+		user1.PublicKey.ToBase58(),
+	)
+	if err != nil {
+		log.Fatalf("failed to request airdrop, err: %v", err)
+	}
+	fmt.Printf("user1 balance: %v\n\n", balance)
 
 	mint := types.NewAccount()
 	fmt.Printf("NFT: %v\n\n", mint.PublicKey.ToBase58())
@@ -315,10 +352,14 @@ func main() {
 	receiver := types.NewAccount()
 	fmt.Printf("receiver: %v\n\n", receiver.PublicKey.ToBase58())
 
-	mintNFT(c, feePayer, mint, collection)
+	txHash, tokenAddress, err := mintNFT(c, feePayer, &NftMintReq{receiver: user1.PublicKey, name: "game nft 1", uri: "ipfs://123", collection: collection.PublicKey})
+	if err != nil {
+		return
+	}
+	waitForTxConfirmation(c, txHash)
 
-	ata := transferNFT(c, feePayer, mint, receiver)
+	//ata := transferNFT(c, feePayer, mint, receiver)
 
-	getNFTInfo(c, ata)
+	getNFTInfo(c, *tokenAddress)
 
 }
