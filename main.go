@@ -30,7 +30,7 @@ type NftMintReq struct {
 
 type NftTransferReq struct {
 	tokenAddress common.PublicKey
-	sender       common.PublicKey
+	sender       types.Account
 	receiver     common.PublicKey
 }
 
@@ -163,7 +163,7 @@ func transferNFT(c *client.Client, feePayer types.Account, req *NftTransferReq) 
 	mintPubkey := tokenAccount.Mint
 
 	// Sender's ATA (must already exist)
-	senderAta, _, err := common.FindAssociatedTokenAddress(req.sender, mintPubkey)
+	senderAta, _, err := common.FindAssociatedTokenAddress(req.sender.PublicKey, mintPubkey)
 	if err != nil {
 		slog.Error("failed to find sender's ATA: ", "error", err)
 		return "", nil, err
@@ -187,7 +187,7 @@ func transferNFT(c *client.Client, feePayer types.Account, req *NftTransferReq) 
 			FeePayer:        feePayer.PublicKey,
 			RecentBlockhash: res.Blockhash,
 			Instructions: []types.Instruction{
-				associated_token_account.CreateAssociatedTokenAccount(associated_token_account.CreateAssociatedTokenAccountParam{
+				associated_token_account.CreateIdempotent(associated_token_account.CreateIdempotentParam{
 					Funder:                 feePayer.PublicKey,
 					Owner:                  req.receiver,
 					Mint:                   mintPubkey,
@@ -197,14 +197,14 @@ func transferNFT(c *client.Client, feePayer types.Account, req *NftTransferReq) 
 					From:     senderAta,
 					To:       receiverAta,
 					Mint:     mintPubkey,
-					Auth:     feePayer.PublicKey,
+					Auth:     req.sender.PublicKey,
 					Signers:  []common.PublicKey{},
 					Amount:   1,
 					Decimals: 0,
 				}),
 			},
 		}),
-		Signers: []types.Account{feePayer},
+		Signers: []types.Account{feePayer, req.sender},
 	})
 	if err != nil {
 		slog.Error("failed to new tx, err: ", "error", err)
@@ -358,7 +358,13 @@ func main() {
 	}
 	waitForTxConfirmation(c, txHash)
 
-	//ata := transferNFT(c, feePayer, mint, receiver)
+	getNFTInfo(c, *tokenAddress)
+
+	txHash, tokenAddress, err = transferNFT(c, feePayer, &NftTransferReq{tokenAddress: *tokenAddress, sender: user1, receiver: receiver.PublicKey})
+	if err != nil {
+		return
+	}
+	waitForTxConfirmation(c, txHash)
 
 	getNFTInfo(c, *tokenAddress)
 
